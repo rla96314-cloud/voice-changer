@@ -1,7 +1,7 @@
 {
   "name": "voice-changer",
   "productName": "VoiceChanger",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "실시간 음성변조 + 녹음 데스크톱 앱",
   "main": "main.js",
   "author": "rla96314",
@@ -25,8 +25,18 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
