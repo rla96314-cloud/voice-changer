@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>VoiceChanger 자막 오버레이</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  }
+
+  /* 화면 전체를 덮는 flex 컨테이너 — 가로/세로 위치를 여기서 정한다 */
+  #wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    padding: 5vh 5vw;
+    box-sizing: border-box;
+  }
+  #wrap.h-left   { justify-content: flex-start; }
+  #wrap.h-center { justify-content: center; }
+  #wrap.h-right  { justify-content: flex-end; }
+  #wrap.v-top    { align-items: flex-start; }
+  #wrap.v-middle { align-items: center; }
+  #wrap.v-bottom { align-items: flex-end; }
+
+  #caption {
+    font-weight: 800;
+    line-height: 1.35;
+    word-break: keep-all;
+    opacity: 0;
+    transition: opacity .25s;
+  }
+  #caption.on { opacity: 1; }
+
+  /* 배치: 가로 / 세로 쌓기 / 세로쓰기 */
+  #caption.layout-row {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: .3em;
+    row-gap: .1em;
+  }
+  #caption.layout-column {
+    display: flex;
+    flex-direction: column;
+    row-gap: .12em;
+  }
+  #caption.layout-vertical {
+    display: block;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    max-height: 90vh;
+  }
+  /* 세로쓰기 단어 사이 간격 (공백 문자 대신) */
+  #caption.layout-vertical .w { margin-bottom: .28em; }
+  #caption.layout-vertical .w:last-child { margin-bottom: 0; }
+  #caption.layout-row.h-left,   #caption.layout-column.h-left   { justify-content: flex-start; align-items: flex-start; text-align: left; }
+  #caption.layout-row.h-center, #caption.layout-column.h-center { justify-content: center;    align-items: center;     text-align: center; }
+  #caption.layout-row.h-right,  #caption.layout-column.h-right  { justify-content: flex-end;  align-items: flex-end;   text-align: right; }
+
+  .w {
+    color: #fff;
+    /* 영상 위 가독성을 위한 두꺼운 외곽선 */
+    -webkit-text-stroke: 2px #000;
+    paint-order: stroke fill;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, .9);
+    transition: color .1s, text-shadow .1s;
+  }
+  .w.hide { display: none; }
+  .w.active { color: var(--accent); text-shadow: 0 0 18px var(--accent), 0 2px 6px rgba(0, 0, 0, .9); }
+  /* 강조 모드(reveal 끔)일 때만 지나간/예정 단어를 흐리게 */
+  #caption.mode-highlight .w { color: rgba(255, 255, 255, .55); }
+  #caption.mode-highlight .w.done { color: rgba(255, 255, 255, .8); }
+  #caption.mode-highlight .w.active { color: #fff; text-shadow: 0 0 18px var(--accent), 0 2px 6px rgba(0, 0, 0, .9); }
+  .w.pop { animation: pop .22s ease-out; }
+  @keyframes pop { from { opacity: .2; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
+</style>
+</head>
+<body>
+  <div id="wrap"><span id="caption"></span></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const wrap = document.getElementById('wrap');
+  const cap = document.getElementById('caption');
+
+  // URL 파라미터가 초기값, 앱에서 style 이벤트가 오면 실시간으로 덮어씀
+  const style = {
+    h: q.get('h') || 'center',                    // left | center | right
+    v: q.get('v') || q.get('pos') || 'bottom',    // top | middle | bottom (구 pos= 호환)
+    layout: q.get('layout') || 'row',             // row | column | vertical
+    size: parseInt(q.get('size') || '46', 10),
+    accent: '#' + (q.get('accent') || '4f8cff').replace('#', ''),
+    reveal: q.get('reveal') !== '0',              // 차례로 나타내기 (기본 켬)
+  };
+  const urlMax = parseInt(q.get('max') || '0', 10) || 0;
+
+  function applyStyle() {
+    const v = style.v === 'top' || style.v === 'middle' ? style.v : 'bottom';
+    const h = style.h === 'left' || style.h === 'right' ? style.h : 'center';
+    const layout = ['row', 'column', 'vertical'].includes(style.layout) ? style.layout : 'row';
+    wrap.className = `h-${h} v-${v}`;
+    cap.className = `layout-${layout} h-${h} ${style.reveal ? 'mode-reveal' : 'mode-highlight'}` +
+      (cap.classList.contains('on') ? ' on' : '');
+    cap.style.fontSize = style.size + 'px';
+    cap.style.setProperty('--accent', style.accent);
+  }
+  applyStyle();
+
+  let words = [];
+  let chunks = [];
+  let curChunk = -1;
+
+  function chunkWords(ws, maxChars) {
+    if (!maxChars || maxChars <= 0) return [{ start: 0, end: ws.length }];
+    const out = [];
+    let start = 0, len = 0;
+    for (let i = 0; i < ws.length; i++) {
+      const wlen = ws[i].text.length + (i > start ? 1 : 0);
+      if (len + wlen > maxChars && i > start) { out.push({ start, end: i }); start = i; len = ws[i].text.length; }
+      else len += wlen;
+    }
+    out.push({ start, end: ws.length });
+    return out;
+  }
+  function chunkOf(idx) {
+    if (idx < 0) return 0;
+    const ci = chunks.findIndex((c) => idx >= c.start && idx < c.end);
+    return ci < 0 ? curChunk : ci;
+  }
+  function renderChunk(ci) {
+    cap.innerHTML = '';
+    const { start, end } = chunks[ci];
+    for (let i = start; i < end; i++) {
+      const s = document.createElement('span');
+      s.className = 'w';
+      s.textContent = words[i].text;
+      s.dataset.i = i;
+      // 세로쓰기에서 공백 문자는 글자 한 칸을 통째로 차지해 간격이 너무 벌어진다.
+      // 공백 대신 CSS 여백(.layout-vertical .w)으로 좁게 띄운다.
+      cap.appendChild(s);
+    }
+  }
+  // 진행 상황 반영: reveal 모드면 말한 단어까지만 차례로 나타남
+  let lastIdx = -1;
+  function highlight(idx) {
+    lastIdx = idx;
+    const ci = chunkOf(idx);
+    if (ci !== curChunk) { renderChunk(ci); curChunk = ci; }
+    cap.querySelectorAll('.w').forEach((s) => {
+      const i = +s.dataset.i;
+      const isNew = style.reveal && i === idx && s.classList.contains('hide');
+      s.classList.toggle('hide', style.reveal && i > idx);
+      s.classList.toggle('active', i === idx);
+      s.classList.toggle('done', i < idx);
+      if (isNew) { s.classList.remove('pop'); void s.offsetWidth; s.classList.add('pop'); }
+    });
+  }
+  function show(ev) {
+    words = ev.words || [];
+    if (Array.isArray(ev.chunks) && ev.chunks.length) chunks = ev.chunks;
+    else chunks = chunkWords(words, urlMax);
+    curChunk = 0;
+    renderChunk(0);
+    highlight(ev.idx == null ? -1 : ev.idx);
+    cap.classList.add('on');
+  }
+  function clear() {
+    cap.classList.remove('on');
+    setTimeout(() => { if (!cap.classList.contains('on')) cap.innerHTML = ''; }, 300);
+  }
+
+  function connect() {
+    const es = new EventSource('/events');
+    es.onmessage = (e) => {
+      let ev;
+      try { ev = JSON.parse(e.data); } catch { return; }
+      if (ev.type === 'show') show(ev);
+      else if (ev.type === 'word') highlight(ev.idx);
+      else if (ev.type === 'clear') clear();
+      else if (ev.type === 'style') {
+        Object.assign(style, ev.style || {});
+        applyStyle();
+        // 배치가 바뀌면 다시 그리고, 진행 상태(hide/active/done)도 그대로 복원
+        if (curChunk >= 0 && chunks.length) { renderChunk(curChunk); highlight(lastIdx); }
+      }
+    };
+    es.onerror = () => { es.close(); setTimeout(connect, 1500); };
+  }
+  connect();
+</script>
+</body>
+</html>

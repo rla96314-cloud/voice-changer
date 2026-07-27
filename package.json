@@ -1,0 +1,38 @@
+{
+  "name": "voice-changer",
+  "productName": "VoiceChanger",
+  "version": "0.1.0",
+  "description": "실시간 음성변조 + 녹음 데스크톱 앱",
+  "main": "main.js",
+  "author": "rla96314",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.rla96314.voicechanger",
+    "productName": "VoiceChanger",
+    "files": [
+      "main.js",
+      "preload.js",
+      "overlay-server.js",
+      "renderer/**"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

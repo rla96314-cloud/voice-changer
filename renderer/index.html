@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>VoiceChanger</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="overlay" class="overlay hidden">
+    <div class="overlay-box">
+      <h2>마이크를 사용할 수 없습니다</h2>
+      <p id="overlayMsg"></p>
+      <button id="overlayCloseBtn" class="overlay-close">확인 — 마이크 없이 계속</button>
+    </div>
+  </div>
+
+  <header>
+    <div class="brand">
+      <span class="logo">🎙️</span>
+      <h1>VoiceChanger</h1>
+      <span id="statusDot" class="dot off"></span>
+      <span id="statusText" class="status">준비 중…</span>
+    </div>
+    <div class="devices">
+      <label>입력
+        <select id="inputSelect"></select>
+      </label>
+      <label>출력(모니터)
+        <select id="outputSelect"></select>
+      </label>
+      <button id="monitorBtn" class="toggle-btn" title="변조된 소리를 헤드폰으로 듣기">🎧 모니터 켬</button>
+      <button id="bypassBtn" class="toggle-btn" title="Ctrl+Alt+B">원본 통과 꺼짐</button>
+    </div>
+    <div class="record-area">
+      <button id="recordBtn" class="record-btn" title="Ctrl+Alt+R">● 녹음</button>
+      <span id="recordTime" class="record-time">00:00</span>
+    </div>
+  </header>
+
+  <main>
+    <aside class="presets">
+      <h2>프리셋 <span class="hint">Ctrl+Alt+1~8</span></h2>
+      <div id="presetGrid" class="preset-grid"></div>
+      <h2>내 프리셋</h2>
+      <div class="user-preset-save">
+        <input id="userPresetName" type="text" placeholder="프리셋 이름" maxlength="12" />
+        <button id="userPresetSaveBtn">현재 설정 저장</button>
+      </div>
+      <div id="userPresetList" class="user-preset-list"></div>
+    </aside>
+
+    <section class="mixer">
+      <div class="strip" id="sec-input">
+        <h3>입력</h3>
+        <div class="meter"><div id="meterIn" class="meter-fill"></div></div>
+        <div class="controls"></div>
+        <label class="check"><input type="checkbox" id="gateOn" /> 노이즈 게이트</label>
+      </div>
+      <div class="strip" id="sec-eq">
+        <h3>EQ</h3>
+        <div class="controls"></div>
+      </div>
+      <div class="strip" id="sec-pitch">
+        <h3>피치 · 변조</h3>
+        <div class="controls"></div>
+      </div>
+      <div class="strip" id="sec-space">
+        <h3>에코 · 리버브</h3>
+        <div class="controls"></div>
+      </div>
+      <div class="strip" id="sec-output">
+        <h3>출력</h3>
+        <div class="meter"><div id="meterOut" class="meter-fill"></div></div>
+        <div class="controls"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="captionBar" class="caption-bar hidden"></div>
+
+  <section class="tts">
+    <span class="tts-label">🗣️ TTS</span>
+    <input id="ttsText" type="text" placeholder="내용 입력 후 Enter — / 로 끊어읽기 & 자막 줄 나눔 (// = 더 길게 쉼)" maxlength="2000" />
+    <select id="ttsVoice" title="목소리"></select>
+    <button id="ttsCfgBtn" title="로컬 TTS 엔진(수퍼토닉·GPT-SoVITS) 서버 설정">⚙</button>
+    <label class="tts-rate" title="말하기 속도">속도
+      <input id="ttsRate" type="range" min="-10" max="10" step="1" value="0" />
+    </label>
+    <label class="check tts-caption" title="말하는 속도에 맞춰 자막 표시 (자연스러운 음성만)">
+      <input type="checkbox" id="captionOn" checked /> 자막
+    </label>
+    <label class="tts-rate" title="자막은 / 로 직접 나뉩니다. 이 값은 한 구간이 너무 길 때 자동으로 더 나눌 최대 글자수 (0 = 자동분할 끔)">자동분할
+      <input id="captionMax" type="number" min="0" max="200" step="5" value="0" />
+    </label>
+    <button id="ttsBtn">🔊 말하기</button>
+    <button id="ttsStopBtn" title="재생 중지">■</button>
+  </section>
+
+  <section class="capstyle">
+    <span class="tts-label">🎨 자막 스타일</span>
+    <label>가로
+      <select id="stH">
+        <option value="left">왼쪽</option>
+        <option value="center" selected>가운데</option>
+        <option value="right">오른쪽</option>
+      </select>
+    </label>
+    <label>세로
+      <select id="stV">
+        <option value="top">위</option>
+        <option value="middle">가운데</option>
+        <option value="bottom" selected>아래</option>
+      </select>
+    </label>
+    <label>배치
+      <select id="stLayout">
+        <option value="row" selected>가로로</option>
+        <option value="column">세로로 쌓기</option>
+        <option value="vertical">세로쓰기</option>
+      </select>
+    </label>
+    <label>크기
+      <input id="stSize" type="number" min="16" max="140" step="2" value="46" />
+    </label>
+    <label>강조색
+      <input id="stAccent" type="color" value="#4f8cff" />
+    </label>
+    <label class="check" title="말하는 대로 단어가 하나씩 나타납니다. 끄면 문장 전체가 보이고 현재 단어만 강조됩니다">
+      <input type="checkbox" id="stReveal" checked /> 차례로 나타내기
+    </label>
+    <button id="overlayBtn" title="OBS 브라우저 소스용 자막 오버레이 주소 복사">📺 오버레이 주소 복사</button>
+  </section>
+
+  <section class="bottom">
+    <div class="tabs">
+      <button class="tab active" data-tab="cues">🎬 대본</button>
+      <button class="tab" data-tab="sets">🎯 등록 큐</button>
+      <button class="tab" data-tab="recs">🎙️ 녹음 파일</button>
+      <span class="tab-actions">
+        <span id="cueActions">
+          <span id="cueStatus" class="cue-status"></span>
+          <label class="gap-def" title="새 줄을 추가할 때 기본으로 넣을 '다음 줄까지 공백' 시간">공백
+            <input id="cueGapDefault" type="number" min="0" max="60" step="0.5" value="0.5" />초
+          </label>
+          <button id="scriptPasteBtn" title="대본 전체를 한 번에 붙여넣습니다. 한 줄이 대사 하나가 됩니다">📄 붙여넣기</button>
+          <button id="cueAddBtn" title="줄 하나 추가">＋ 줄</button>
+          <button id="cuePrepareBtn" title="모든 줄의 음성을 미리 만들어 둡니다. 준비되면 누르는 즉시 재생됩니다">⚡ 준비</button>
+          <button id="cueRegisterBtn" title="완성된 대본 전체를 이름 붙여 등록 큐로 저장합니다">💾 큐로 등록</button>
+          <button id="scriptPlayBtn" class="primary" title="첫 줄부터 공백시간에 맞춰 자동으로 이어서 재생합니다">▶ 재생</button>
+        </span>
+        <span id="setActions" class="hidden">
+          <span id="setStatus" class="cue-status"></span>
+          <button id="setStopBtn" title="재생 중인 큐 정지 (Esc)">⏹ 정지</button>
+        </span>
+        <span id="recActions" class="hidden">
+          <button id="openFolderBtn">📁 폴더 열기</button>
+        </span>
+      </span>
+    </div>
+    <div id="tab-cues" class="tab-panel">
+      <div id="cueList" class="cue-list"></div>
+    </div>
+    <div id="tab-sets" class="tab-panel hidden">
+      <div id="setList" class="set-grid"></div>
+    </div>
+    <div id="tab-recs" class="tab-panel hidden">
+      <div id="recList" class="rec-list"></div>
+    </div>
+    <audio id="playbackEl"></audio>
+  </section>
+
+  <div id="scriptModal" class="modal hidden">
+    <div class="modal-box">
+      <h3>대본 붙여넣기</h3>
+      <p class="modal-hint">한 줄이 대사 하나가 됩니다. 빈 줄은 무시되고, 줄 안의 <b>/</b> 는 끊어읽기·자막 나눔으로 동작합니다.</p>
+      <textarea id="scriptText" rows="9" placeholder="안녕하세요 여러분 / 오늘 방송에 오신 것을 환영합니다&#10;오늘은 특별한 소식을 준비했습니다&#10;끝까지 함께해 주세요"></textarea>
+      <label class="row-inline">줄 사이 공백
+        <input id="scriptGap" type="number" min="0" max="60" step="0.5" value="0.5" /> 초
+      </label>
+      <div class="modal-btns">
+        <label class="check"><input type="checkbox" id="scriptReplace" checked /> 기존 대본 지우고 넣기</label>
+        <button id="scriptCancelBtn">취소</button>
+        <button id="scriptSaveBtn" class="primary">대본 넣기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="localTtsModal" class="modal hidden">
+    <div class="modal-box">
+      <h3>로컬 TTS 설정</h3>
+      <p class="modal-hint">직접 설치한 로컬 TTS 서버와 연결합니다. 이 엔진들은 자막이 재생 길이에 맞춰 <b>추정 동기화</b>됩니다.</p>
+
+      <h4 class="cfg-sub">🚀 수퍼토닉 — 설치: <code>pip install supertonic</code> → 실행: <code>supertonic serve</code></h4>
+      <label>서버 주소
+        <input id="stUrl" type="text" placeholder="http://127.0.0.1:7788" />
+      </label>
+      <label>목소리
+        <select id="stVoice">
+          <option value="F1">F1 (여성 1)</option>
+          <option value="F2">F2 (여성 2)</option>
+          <option value="F3">F3 (여성 3)</option>
+          <option value="F4">F4 (여성 4)</option>
+          <option value="F5">F5 (여성 5)</option>
+          <option value="M1">M1 (남성 1)</option>
+          <option value="M2">M2 (남성 2)</option>
+          <option value="M3">M3 (남성 3)</option>
+          <option value="M4">M4 (남성 4)</option>
+          <option value="M5">M5 (남성 5)</option>
+        </select>
+      </label>
+
+      <h4 class="cfg-sub">🎤 GPT-SoVITS — 통합패키지에서 <code>api_v2.py</code> 실행 (기본 포트 9880)</h4>
+      <label>서버 주소
+        <input id="gsvUrl" type="text" placeholder="http://127.0.0.1:9880" />
+      </label>
+      <label>참조 음성 파일 경로 (3~10초, 클론할 목소리)
+        <input id="gsvRef" type="text" placeholder="C:\voice\ref.wav" />
+      </label>
+      <label>참조 음성이 말하는 내용 (정확할수록 품질↑)
+        <input id="gsvPrompt" type="text" placeholder="참조 음성에서 말한 문장 그대로" />
+      </label>
+      <label>참조 음성 언어
+        <select id="gsvLang">
+          <option value="ko">한국어</option>
+          <option value="en">영어</option>
+          <option value="ja">일본어</option>
+          <option value="zh">중국어</option>
+        </select>
+      </label>
+
+      <div class="modal-btns">
+        <button id="localTtsCancelBtn">취소</button>
+        <button id="localTtsSaveBtn" class="primary">저장</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="setModal" class="modal hidden">
+    <div class="modal-box">
+      <h3>큐로 등록</h3>
+      <p class="modal-hint" id="setInfo"></p>
+      <label>큐 이름
+        <input id="setName" type="text" maxlength="24" placeholder="예: 오프닝, 1부 멘트, 마무리 인사" />
+      </label>
+      <div class="modal-btns">
+        <button id="setCancelBtn">취소</button>
+        <button id="setSaveBtn" class="primary">등록</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cueModal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="cueModalTitle">큐 추가</h3>
+      <label>이름
+        <input id="cueName" type="text" maxlength="24" placeholder="예: 오프닝 인사" />
+      </label>
+      <label>내용
+        <textarea id="cueText" rows="4" maxlength="2000" placeholder="말할 내용 — / 로 끊어읽기 & 자막 나눔"></textarea>
+      </label>
+      <div class="modal-btns">
+        <button id="cueCancelBtn">취소</button>
+        <button id="cueSaveBtn" class="primary">저장</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <audio id="monitorEl"></audio>
+  <script src="edge-tts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
