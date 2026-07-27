@@ -21,6 +21,7 @@
       "main.js",
       "preload.js",
       "overlay-server.js",
+      "local-tts.js",
       "renderer/**"
     ],
     "win": {
