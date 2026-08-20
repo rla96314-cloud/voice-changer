@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, shell, systemPreferences, session } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, shell, systemPreferences, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -38,6 +38,24 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+  // 렌더러 경고·오류를 파일로 남김 (문제 발생 시 확인용)
+  const logFile = path.join(app.getPath('userData'), 'renderer.log');
+  win.webContents.on('console-message', (_e, level, message) => {
+    if (level >= 2) {
+      try { fs.appendFileSync(logFile, `${new Date().toISOString()} [${level}] ${message}\n`); } catch (err) { /* 무시 */ }
+    }
+  });
+  // 입력칸 우클릭 편집 메뉴 (Electron은 기본 제공 안 함 — 없으면 우클릭 붙여넣기 불가)
+  win.webContents.on('context-menu', (_e, params) => {
+    if (!params.isEditable) return;
+    Menu.buildFromTemplate([
+      { role: 'cut', label: '잘라내기' },
+      { role: 'copy', label: '복사' },
+      { role: 'paste', label: '붙여넣기' },
+      { type: 'separator' },
+      { role: 'selectAll', label: '모두 선택' },
+    ]).popup();
+  });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.on('closed', () => { win = null; });
 }
@@ -139,6 +157,14 @@ ipcMain.handle('list-recordings', async () => {
     .sort((a, b) => b.mtime - a.mtime);
 });
 
+ipcMain.handle('read-recording', async (_e, filePath) => {
+  const dir = recordDir();
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(dir + path.sep)) throw new Error('녹음 폴더 밖의 파일은 읽을 수 없습니다');
+  const buf = fs.readFileSync(resolved);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+});
+
 ipcMain.handle('delete-recording', async (_e, filePath) => {
   const dir = recordDir();
   const resolved = path.resolve(filePath);
@@ -196,6 +222,40 @@ ipcMain.handle('tts-voices', () => getTtsVoices());
 
 ipcMain.handle('overlay-url', () => `http://localhost:${OVERLAY_PORT}/overlay`);
 ipcMain.on('caption', (_e, event) => overlayServer.push(event));
+
+// ElevenLabs API 프록시 — 렌더러 CORS 우회. 호스트는 api.elevenlabs.io로 고정
+ipcMain.handle('elevenlabs-fetch', (_e, { path: apiPath, method = 'GET', apiKey, json = null, timeoutMs = 30000 }) => {
+  return new Promise((resolve) => {
+    if (!apiKey) return resolve({ ok: false, error: 'API 키가 없습니다' });
+    if (!/^\/v\d\//.test(apiPath || '')) return resolve({ ok: false, error: '잘못된 API 경로' });
+    const https = require('https');
+    const body = json ? Buffer.from(JSON.stringify(json)) : null;
+    const req = https.request({
+      hostname: 'api.elevenlabs.io',
+      path: apiPath,
+      method,
+      headers: {
+        'xi-api-key': apiKey,
+        ...(body ? { 'Content-Type': 'application/json', 'Content-Length': body.length } : {}),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        resolve({
+          ok: res.statusCode === 200,
+          status: res.statusCode,
+          data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+        });
+      });
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('응답 시간 초과')));
+    req.on('error', (err) => resolve({ ok: false, error: err.message }));
+    if (body) req.write(body);
+    req.end();
+  });
+});
 
 // 로컬 TTS 서버(수퍼토닉/GPT-SoVITS) 프록시 — 렌더러의 CORS 제약 우회, localhost 전용
 ipcMain.handle('local-tts-fetch', async (_e, opts) => {

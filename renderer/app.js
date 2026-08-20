@@ -54,6 +54,7 @@ const state = {
   recStart: 0,
   recChunks: [],
   playingPath: null,
+  reversePath: null, // 거꾸로 재생 중인 녹음 파일 경로
 };
 
 let ctx, stream, srcNode;
@@ -469,6 +470,16 @@ async function renderRecordings() {
       }
       renderRecordings();
     });
+    // 거꾸로 재생 (이펙트 체인 통과 — 재생 중 ● 녹음을 누르면 뒤집힌 소리를 새 파일로 녹음 가능)
+    const revBtn = document.createElement('button');
+    revBtn.textContent = state.reversePath === item.path ? '⏹' : '◀';
+    revBtn.title = '거꾸로 재생 (변조 이펙트 적용)';
+    if (state.reversePath === item.path) revBtn.classList.add('playing');
+    revBtn.addEventListener('click', () => {
+      if (state.reversePath === item.path) { stopTts(); return; }
+      playRecordingReversed(item);
+    });
+
     const delBtn = document.createElement('button');
     delBtn.textContent = '🗑';
     delBtn.title = '휴지통으로 이동';
@@ -478,6 +489,7 @@ async function renderRecordings() {
       renderRecordings();
     });
     row.appendChild(playBtn);
+    row.appendChild(revBtn);
     row.appendChild(delBtn);
     list.appendChild(row);
   }
@@ -599,6 +611,7 @@ function captionMax() {
 
 /* ── 자막 스타일 ─────────────────────────────── */
 function captionStyle() {
+  const fsel = $('stFont').value;
   return {
     h: $('stH').value,
     v: $('stV').value,
@@ -606,13 +619,18 @@ function captionStyle() {
     size: parseInt($('stSize').value, 10) || 46,
     accent: $('stAccent').value,
     reveal: $('stReveal').checked,
+    font: fsel === 'custom' ? $('stFontCustom').value.trim() : fsel,
+    weight: parseInt($('stWeight').value, 10) || 800,
   };
 }
 
-// 스타일 변경을 오버레이에 즉시 반영 (OBS에서 바로 보임)
+// 스타일 변경을 오버레이에 즉시 반영 (OBS에서 바로 보임) + 앱 자막바에도 폰트 적용
 function pushStyle() {
   const style = captionStyle();
   localStorage.setItem('captionStyle', JSON.stringify(style));
+  const bar = $('captionBar');
+  bar.style.fontFamily = style.font ? style.font + ', Pretendard, "Malgun Gothic", sans-serif' : '';
+  bar.style.fontWeight = style.weight;
   window.api.caption({ type: 'style', style });
 }
 
@@ -626,8 +644,20 @@ function restoreStyle() {
     if (saved.size) $('stSize').value = saved.size;
     if (saved.accent) $('stAccent').value = saved.accent;
     if (typeof saved.reveal === 'boolean') $('stReveal').checked = saved.reveal;
+    if (saved.weight) $('stWeight').value = String(saved.weight);
+    if (saved.font != null) {
+      // 저장된 폰트가 프리셋에 있으면 선택, 아니면 '직접 입력'으로 복원
+      const opt = [...$('stFont').options].find((o) => o.value === saved.font);
+      if (opt) $('stFont').value = saved.font;
+      else if (saved.font) { $('stFont').value = 'custom'; $('stFontCustom').value = saved.font; }
+    }
   }
-  for (const id of ['stH', 'stV', 'stLayout', 'stSize', 'stAccent', 'stReveal']) {
+  const syncFontCustom = () => {
+    $('stFontCustom').style.display = $('stFont').value === 'custom' ? '' : 'none';
+  };
+  syncFontCustom();
+  $('stFont').addEventListener('change', syncFontCustom);
+  for (const id of ['stH', 'stV', 'stLayout', 'stSize', 'stAccent', 'stReveal', 'stFont', 'stFontCustom', 'stWeight']) {
     $(id).addEventListener('change', pushStyle);
   }
   pushStyle();
@@ -686,20 +716,67 @@ function stopTts() {
   clearCaption();
 }
 
+// 오디오 버퍼를 거꾸로 뒤집은 사본을 만든다 (역재생용)
+function reverseBuffer(buf) {
+  const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const src = buf.getChannelData(ch);
+    const dst = out.getChannelData(ch);
+    for (let i = 0, n = src.length; i < n; i++) dst[i] = src[n - 1 - i];
+  }
+  return out;
+}
+
+// 녹음 파일을 거꾸로 재생 (이펙트 체인 통과). 이미 뒤집었으므로 역재생 토글과 무관하게 playSynth 직행
+async function playRecordingReversed(item) {
+  if (!ctx) return;
+  try {
+    const ab = await window.api.readRecording(item.path);
+    const audioBuf = await ctx.decodeAudioData(ab);
+    state.reversePath = item.path;
+    playSynth({ audioBuf: reverseBuffer(audioBuf), words: [], text: '' }, false, () => {
+      // 그 사이 다른 파일의 역재생이 시작됐으면 그쪽 상태를 건드리지 않음
+      if (state.reversePath === item.path) {
+        state.reversePath = null;
+        renderRecordings();
+      }
+    });
+    renderRecordings();
+  } catch (e) {
+    state.reversePath = null;
+    toast('거꾸로 재생 실패: ' + e.message);
+  }
+}
+
+// playSynth 호출 전에 역재생 토글을 반영하는 래퍼 — TTS·큐·대본·등록큐 공통 진입점
+function playEntry(entry, useCaption, onEnd) {
+  if ($('revOn').checked) {
+    // 거꾸로 재생: 자막은 의미가 없으므로 표시하지 않음
+    playSynth({ audioBuf: reverseBuffer(entry.audioBuf), words: [], text: entry.text }, false, onEnd);
+  } else {
+    playSynth(entry, useCaption, onEnd);
+  }
+}
+
 // 이미 만들어진 음성(버퍼)을 이펙트 체인으로 재생 + 자막 표시. TTS 입력·큐·대본 재생에서 사용
 // onEnd: 재생이 끝나면(또는 중단되면) 호출 — 대본 자동 재생이 다음 줄로 넘어가는 신호
 function playSynth(entry, useCaption, onEnd) {
   stopTts();
-  ttsSource = ctx.createBufferSource();
-  ttsSource.buffer = entry.audioBuf;
-  ttsSource.connect(nodes.ttsIn);
-  ttsSource.onended = () => {
-    ttsSource = null;
-    setPlayingCue(null);
-    clearCaption();
-    if (onEnd) onEnd();
+  const src = ctx.createBufferSource();
+  src.buffer = entry.audioBuf;
+  src.connect(nodes.ttsIn);
+  src.onended = () => {
+    // onended는 비동기로 늦게 오므로, 그 사이 새 재생이 시작됐다면
+    // (ttsSource가 이미 교체/해제됨) 새 재생의 자막·하이라이트를 지우면 안 된다
+    if (ttsSource === src) {
+      ttsSource = null;
+      setPlayingCue(null);
+      clearCaption();
+    }
+    if (onEnd) onEnd(); // 대본 진행 신호는 항상 전달
   };
-  ttsSource.start();
+  ttsSource = src;
+  src.start();
   if (useCaption && entry.words.length > 0) showCaption(entry.words, entry.text);
 }
 
@@ -710,7 +787,118 @@ function localTtsSettings() {
   return {
     st: { url: 'http://127.0.0.1:7788', voice: 'F1', ...((s && s.st) || {}) },
     gsv: { url: 'http://127.0.0.1:9880', refAudio: '', promptText: '', promptLang: 'ko', ...((s && s.gsv) || {}) },
+    el: { apiKey: '', model: 'eleven_turbo_v2_5', stability: 80, seedLock: true, ...((s && s.el) || {}) },
   };
+}
+
+/* ── ElevenLabs ──────────────────────────────── */
+function b64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+// 글자 단위 타임스탬프 → 단어 단위. 순수 문장부호 토큰은 버리고,
+// 단어에 붙은 문장부호는 표시에서 떼되 타이밍은 유지 (원문 단어 수와 정렬 보장)
+function charsToWords(chars, starts, ends) {
+  const words = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    const clean = cur.text.replace(/^[.,!?…'"“”‘’]+|[.,!?…'"“”‘’]+$/g, '');
+    if (clean) words.push({ start: cur.start, end: cur.end, text: clean });
+    cur = null;
+  };
+  for (let i = 0; i < chars.length; i++) {
+    if (/\s/.test(chars[i])) { flush(); continue; }
+    if (!cur) cur = { start: starts[i], end: ends[i], text: chars[i] };
+    else { cur.text += chars[i]; cur.end = ends[i]; }
+  }
+  flush();
+  return words;
+}
+
+async function synthElevenLabs(text, voiceId, rate) {
+  const cfg = localTtsSettings().el;
+  if (!cfg.apiKey) throw new Error('ElevenLabs API 키가 없습니다 — ⚙ 설정에서 입력하세요');
+  const speed = Math.min(1.2, Math.max(0.7, 1 + rate * 0.025));
+  // 문장이 부호 없이 끝나면 끝음이 붕 뜸 → 마침표를 붙여 서술형(끝음 내림)으로 끝맺음
+  let sendText = pauseToPunct(text).trim();
+  if (!/[.!?…]$/.test(sendText)) sendText += '.';
+  const body = {
+    text: sendText,
+    model_id: cfg.model,
+    // stability(일관성): 높을수록 톤이 흔들리지 않음 — ⚙ 설정값(0~100) 사용
+    voice_settings: {
+      stability: Math.min(1, Math.max(0, (Number(cfg.stability) || 80) / 100)),
+      similarity_boost: 0.75,
+    },
+  };
+  // 시드 고정: 같은 문장 + 같은 설정 = 항상 같은 억양으로 재현
+  if (cfg.seedLock !== false) body.seed = 4242;
+  // Turbo/Flash v2.5는 언어 강제 고정 지원 — 한국어로 못박아 언어 표류 원천 차단
+  // (Multilingual v2는 이 파라미터를 지원하지 않아 자동 감지에 의존)
+  if (/^eleven_(turbo|flash)_v2_5$/.test(cfg.model)) body.language_code = 'ko';
+  if (rate !== 0) body.voice_settings.speed = speed;
+  const r = await window.api.elevenLabsFetch({
+    path: `/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps?output_format=mp3_44100_128`,
+    method: 'POST',
+    apiKey: cfg.apiKey,
+    json: body,
+    timeoutMs: 180000, // 긴 대본 합성 대비
+  });
+  if (!r.ok) {
+    if (r.error) throw new Error('ElevenLabs 연결 실패: ' + r.error);
+    let detail = '';
+    try {
+      const j = JSON.parse(new TextDecoder().decode(r.data));
+      detail = (j.detail && (j.detail.message || j.detail.status)) || j.detail || '';
+      if (typeof detail === 'object') detail = JSON.stringify(detail);
+    } catch { /* JSON 아님 */ }
+    if (r.status === 401) throw new Error('ElevenLabs API 키가 올바르지 않습니다');
+    throw new Error(`ElevenLabs 오류 (HTTP ${r.status})${detail ? ': ' + String(detail).slice(0, 120) : ''}`);
+  }
+  const j = JSON.parse(new TextDecoder().decode(r.data));
+  const al = j.alignment || {};
+  const words = (al.characters && al.characters.length)
+    ? charsToWords(al.characters, al.character_start_times_seconds, al.character_end_times_seconds)
+    : null; // 타임스탬프가 없으면 추정으로 폴백
+  return { ab: b64ToArrayBuffer(j.audio_base64), words };
+}
+
+// 저장된 키로 내 목소리 목록을 불러와 셀렉트에 채움
+async function loadElevenLabsVoices() {
+  const sel = $('ttsVoice');
+  const old = sel.querySelector('optgroup[data-el]');
+  if (old) old.remove();
+  const cfg = localTtsSettings().el;
+  if (!cfg.apiKey) return;
+  toast('ElevenLabs 목소리 불러오는 중…');
+  try {
+    const r = await window.api.elevenLabsFetch({ path: '/v1/voices', apiKey: cfg.apiKey, timeoutMs: 15000 });
+    if (!r.ok) {
+      if (r.error) throw new Error('연결 실패: ' + r.error);
+      let detail = '';
+      try {
+        const j = JSON.parse(new TextDecoder().decode(r.data));
+        detail = (j.detail && (j.detail.message || j.detail.status)) || '';
+      } catch { /* JSON 아님 */ }
+      throw new Error(detail ? String(detail).slice(0, 140) : 'HTTP ' + r.status);
+    }
+    const j = JSON.parse(new TextDecoder().decode(r.data));
+    const g = document.createElement('optgroup');
+    g.label = 'ElevenLabs (인터넷 · 유료)';
+    g.dataset.el = '1';
+    for (const v of j.voices || []) g.appendChild(new Option(v.name, 'el:' + v.voice_id));
+    if (g.children.length > 0) sel.insertBefore(g, sel.firstChild);
+    // 저장해둔 선택이 이 그룹이면 복원
+    const saved = localStorage.getItem('ttsVoice');
+    if (saved && saved.startsWith('el:') && [...sel.options].some((o) => o.value === saved)) sel.value = saved;
+    toast(`ElevenLabs 목소리 ${g.children.length}개 불러옴`);
+  } catch (e) {
+    toast('ElevenLabs 목소리 불러오기 실패: ' + e.message);
+  }
 }
 
 // 끊어읽기 마커를 문장부호로 (로컬 엔진은 문장부호에서 자연스럽게 쉼)
@@ -793,6 +981,7 @@ async function synthesizeFor(sel, text, rate) {
     const res = await EDGE_TTS.synthesize(text, sel.slice(5), rate * 5); // -10~10 → -50%~+50%
     return { ab: res.audio, words: res.words };
   }
+  if (sel.startsWith('el:')) return await synthElevenLabs(text, sel.slice(3), rate); // 글자 타임스탬프 → 정밀 자막
   if (sel.startsWith('st:')) return { ab: await synthSupertonic(text, rate), words: null };
   if (sel.startsWith('gsv:')) return { ab: await synthGsv(text, rate), words: null };
   return { ab: await window.api.ttsSpeak({ text, voice: sel.replace(/^os:/, ''), rate }), words: null };
@@ -801,6 +990,10 @@ async function synthesizeFor(sel, text, rate) {
 /* ── 로컬 TTS 설정 모달 ──────────────────────── */
 function openLocalTtsModal() {
   const s = localTtsSettings();
+  $('elKey').value = s.el.apiKey;
+  $('elModel').value = s.el.model;
+  $('elStability').value = s.el.stability;
+  $('elSeedLock').checked = s.el.seedLock !== false;
   $('stUrl').value = s.st.url;
   $('stVoice').value = s.st.voice;
   $('gsvUrl').value = s.gsv.url;
@@ -811,7 +1004,14 @@ function openLocalTtsModal() {
 }
 function closeLocalTtsModal() { $('localTtsModal').classList.add('hidden'); }
 function saveLocalTtsModal() {
+  const prevKey = localTtsSettings().el.apiKey;
   const s = {
+    el: {
+      apiKey: $('elKey').value.trim(),
+      model: $('elModel').value,
+      stability: Math.min(100, Math.max(0, parseInt($('elStability').value, 10) || 80)),
+      seedLock: $('elSeedLock').checked,
+    },
     st: {
       url: $('stUrl').value.trim() || 'http://127.0.0.1:7788',
       voice: $('stVoice').value,
@@ -825,8 +1025,15 @@ function saveLocalTtsModal() {
   };
   localStorage.setItem('localTts', JSON.stringify(s));
   closeLocalTtsModal();
-  renderCues(); // 설정이 바뀌면 로컬 엔진 캐시 준비 상태 갱신
-  toast('로컬 TTS 설정 저장됨');
+  renderCues(); // 설정이 바뀌면 엔진 캐시 준비 상태 갱신
+  // 키가 비어 있으면 바로 알 수 있게 상태를 함께 표시
+  toast(s.el.apiKey ? `TTS 설정 저장됨 (ElevenLabs 키 ${s.el.apiKey.length}자)` : 'TTS 설정 저장됨 (ElevenLabs 키 없음)');
+  // 키가 있으면 항상 목소리 목록 갱신 (같은 키 재저장 시 건너뛰던 버그 수정)
+  if (s.el.apiKey) loadElevenLabsVoices();
+  else if (!s.el.apiKey && prevKey) {
+    const g = $('ttsVoice').querySelector('optgroup[data-el]');
+    if (g) g.remove(); // 키를 지우면 목록에서도 제거
+  }
 }
 
 async function ttsSpeak() {
@@ -843,7 +1050,7 @@ async function ttsSpeak() {
     const { ab, words } = await synthesizeFor(sel, text, rate);
     const audioBuf = await ctx.decodeAudioData(ab);
     const finalWords = words || estimateWords(text, audioBuf.duration);
-    playSynth({ audioBuf, words: finalWords, text }, useCaption);
+    playEntry({ audioBuf, words: finalWords, text }, useCaption);
     $('ttsText').select();
   } catch (e) {
     if ($('ttsVoice').value.startsWith('edge:')) {
@@ -886,6 +1093,10 @@ function cueKey(cue) {
   let extra = '';
   if (sel.startsWith('st:')) extra = JSON.stringify(localTtsSettings().st);
   else if (sel.startsWith('gsv:')) extra = JSON.stringify(localTtsSettings().gsv);
+  else if (sel.startsWith('el:')) {
+    const e = localTtsSettings().el;
+    extra = `${e.model} ${e.stability} ${e.seedLock}`; // 모델·일관성·시드가 바뀌면 재생성
+  }
   return `${cue.text} ${sel} ${$('ttsRate').value} ${extra}`;
 }
 function cueReady(cue) {
@@ -1031,12 +1242,12 @@ async function playCue(id) {
   const useCaption = $('captionOn').checked;
   try {
     if (cueReady(cue)) {
-      playSynth(cueCache.get(cue.id), useCaption);   // 즉시 재생
+      playEntry(cueCache.get(cue.id), useCaption);   // 즉시 재생
       setPlayingCue(cue.id);
     } else {
       toast(`"${cue.name || cue.text.slice(0, 12)}" 생성 중…`);
       const entry = await prepareCue(cue);
-      playSynth(entry, useCaption);
+      playEntry(entry, useCaption);
       setPlayingCue(cue.id);
       renderCues();
     }
@@ -1091,7 +1302,7 @@ async function playScript() {
       if (scriptCancelled) break;
       // playSynth가 내부에서 stopTts()→setPlayingCue(null)을 부르므로 반드시 그 뒤에 하이라이트
       await new Promise((resolve) => {
-        playSynth(entry, $('captionOn').checked, resolve);
+        playEntry(entry, $('captionOn').checked, resolve);
         setPlayingCue(cue.id);
       });
     } catch (e) {
@@ -1209,7 +1420,7 @@ async function playCueSet(setId) {
         ahead = cueReady(nc) ? null : { i: i + 1, p: prepareCue(nc).catch(() => null) };
       }
       if (scriptCancelled) break;
-      await new Promise((resolve) => { playSynth(entry, $('captionOn').checked, resolve); });
+      await new Promise((resolve) => { playEntry(entry, $('captionOn').checked, resolve); });
     } catch (e) {
       toast(`${i + 1}번째 줄 실패: ${e.message}`);
     }
@@ -1430,7 +1641,9 @@ async function init() {
       size: String(s.size),
       accent: s.accent.replace('#', ''),
       reveal: s.reveal ? '1' : '0',
+      weight: String(s.weight),
     });
+    if (s.font) p.set('font', s.font);
     const max = captionMax();
     if (max > 0) p.set('max', String(max));
     const url = `${base}?${p.toString()}`;
@@ -1465,11 +1678,20 @@ async function init() {
   $('cueModal').addEventListener('click', (e) => { if (e.target === $('cueModal')) closeCueModal(); });
   $('cueName').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) $('cueText').focus(); });
 
-  // 로컬 TTS 설정
+  // 저장된 ElevenLabs 키가 있으면 목소리 목록 로드
+  if (localTtsSettings().el.apiKey) loadElevenLabsVoices();
+
+  // TTS 엔진 설정
   $('ttsCfgBtn').addEventListener('click', openLocalTtsModal);
   $('localTtsSaveBtn').addEventListener('click', saveLocalTtsModal);
   $('localTtsCancelBtn').addEventListener('click', closeLocalTtsModal);
-  $('localTtsModal').addEventListener('click', (e) => { if (e.target === $('localTtsModal')) closeLocalTtsModal(); });
+  // 주의: 엔진 설정 모달은 바깥 클릭으로 닫지 않음 — API 키 입력이 날아가는 사고 방지 (취소/Esc/저장만)
+  // 입력칸에서 Enter = 저장
+  for (const id of ['elKey', 'stUrl', 'gsvUrl', 'gsvRef', 'gsvPrompt']) {
+    $(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) saveLocalTtsModal();
+    });
+  }
   // GPT-SoVITS를 처음 고르면 참조 음성 설정이 필요하다고 안내
   $('ttsVoice').addEventListener('change', () => {
     if ($('ttsVoice').value.startsWith('gsv:') && !localTtsSettings().gsv.refAudio) {
@@ -1541,5 +1763,11 @@ async function init() {
   renderRecordings();
   tick();
 }
+
+// 조용히 죽는 오류를 화면에 드러냄 (디버깅용)
+window.addEventListener('error', (e) => toast('오류: ' + e.message));
+window.addEventListener('unhandledrejection', (e) => {
+  toast('오류: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+});
 
 init();

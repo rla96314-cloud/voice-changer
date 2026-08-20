@@ -94,6 +94,8 @@
     size: parseInt(q.get('size') || '46', 10),
     accent: '#' + (q.get('accent') || '4f8cff').replace('#', ''),
     reveal: q.get('reveal') !== '0',              // 차례로 나타내기 (기본 켬)
+    font: q.get('font') || '',                    // 폰트 (OBS PC에 설치돼 있어야 함)
+    weight: parseInt(q.get('weight') || '800', 10),
   };
   const urlMax = parseInt(q.get('max') || '0', 10) || 0;
 
@@ -106,6 +108,10 @@
       (cap.classList.contains('on') ? ' on' : '');
     cap.style.fontSize = style.size + 'px';
     cap.style.setProperty('--accent', style.accent);
+    cap.style.fontFamily = style.font
+      ? style.font + ', Pretendard, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif'
+      : '';
+    cap.style.fontWeight = style.weight || 800;
   }
   applyStyle();
 
